@@ -11,12 +11,6 @@ td, th {
 	text-align: left;
 	width: 96px;
 }
-#UI {
-	position: fixed;3
-	z-index: 50;
-	bottom: 0px;
-
-}
 #LogHolder {
 	position: fixed;
 	z-index: 100;
@@ -30,12 +24,42 @@ td, th {
 #LogHolder.open {
 	width: 95%;
 }
-div#UI {
+#SRUI {
+	width: 380px;
+	height: 70px;
+	background-color: #d0f0d0;
+	padding: 5px;
+	position: absolute;
+	z-index: 150;
+	border: 5px outset #50a050;
+}
+#SRUI button {
+	margin: 10px;
+	width: 100px;
+	height: 50px;
+}
+#UI-Selection {
+	width: 1800px;
+	background-color: #ffd0d0;
+	padding: 3px;
+}
+#RailSelect {
+	border: 3px outset #a070d0;
+	background-color: #e0e0ff;
+	font-weight: bold;
+}
+div.UI {
+	z-index: 50;
 	background-color: #d0d0ff;
 	width: 1800px;
 	padding: 3px;
 }
-div#UI div {
+#MainHolder {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+}
+div.UI div {
 	border: 1px solid black;
 	padding: 3px;
 	margin: 3px;
@@ -46,20 +70,20 @@ div#UI div {
 	line-height: 3em;
 	vertical-align: middle;
 }
-div#UI div.long {
+div.UI div.long {
 	width: 1778px;
 }
-div#UI div.short {
+div.UI div.short {
 	width: 434;
 }
-div#UI div .spacer {
-	padding: 0px;
-	margin: 0px;
-	flex-grow: 1;
-	flex-shrink: 1;
-	visibility: hidden;
+.spacer {
+	padding: 0px !important;
+	margin: 0px !important;
+	flex-grow: 1 !important;
+	flex-shrink: 1 !important;
+	visibility: hidden !important;
 }
-div#UI div * {
+div.UI div * {
 	padding: 3px;
 	margin: 3px;
 	width: 92px;
@@ -67,7 +91,7 @@ div#UI div * {
 	flex-shrink: 0;
 	vertical-align: top;
 }
-div#UI div label {
+div.UI div label {
 	line-height: 2em;
 	width: 86px;
 	display:inline-block;
@@ -94,7 +118,7 @@ rails, players, bank, railKeys, playerKeys, bankKeys
 	{{#each players}}
 		<tr>
 			{{#each .}}
-				<td>{{.}}</td>
+				<td>{{{.}}}</td>
 			{{/each}}
 		</tr>
 	{{/each}}
@@ -324,6 +348,23 @@ const openRail = (player, rail, price) => new TransactionSequence(
 	`${player} opened ${rail} at ${price}`
 );
 
+const floatAndSink = () => new TransactionSequence(
+	(s) => {
+		const results = [];
+		for ( const [name, ent] of Object.entries(s) ) {
+			if ( ent.type === 'Rail' ) {
+				if (s[name][name] === 0 && s['Bank'][name] === 0) {
+					results.push(new StockMoveTransaction(name, 1));
+				} else if (s['Bank'][name] > 0) {
+					results.push(new StockMoveTransaction(name, -1));
+				}
+			}
+		}
+		return results;
+	},
+	`stock round ended`
+);
+
 const give = (from, to, holding, amt) => sale(to, from, holding, amt, 0);
 const giveCash = (from, to, amt) => give(from, to, 'Cash', amt);
 
@@ -423,11 +464,12 @@ function getViewModel(s) {
 	rails = rails.map((r) => railKeys.map((k) => r[k]));
 
 	let players = [];
-	for ( const [name, ent] of Object.entries(s) ) {
+	for ( const [playerName, ent] of Object.entries(s) ) {
 		if ( ent.type === 'Player' ) {
-			const p = {name, Worth: railNames.reduce((sum, n)=>sum + ent[n] * s[n].Price, ent.Cash), Cash: ent.Cash};
-			for ( const n of railNames ) {
-				p[n] = ent[n]
+			const p = {name: playerName, Worth: railNames.reduce((sum, n)=>sum + ent[n] * s[n].Price, ent.Cash), Cash: ent.Cash};
+			for ( const railName of railNames ) {
+				const held = ent[railName];
+				p[railName] = `<span onclick="SRUI(event, '${playerName}', '${railName}')">${held}</span>`;
 			}
 			players.push(p);
 		}
@@ -456,8 +498,10 @@ let playerDropdowns = [];
 let railDropdowns = [];
 let potentialRailDropdowns = [];
 let trainDropdowns = [];
+let entityDropdowns = [];
 
 function render(s = TransactionState) {
+	document.getElementById("SRUI").style.display = 'none';
 	const state = getViewModel(s);
 	document.getElementById("Root").innerHTML = templates["tRoot"](state);
 	document.getElementById("Log").innerHTML = templates["tLog"](TransactionLog);
@@ -486,15 +530,30 @@ function render(s = TransactionState) {
 			prdd.appendChild(opt);
 		}
 	}
-	for ( const ordd of railDropdowns ) {
-		while (ordd.firstChild) {
-			ordd.removeChild(ordd.firstChild);
+	for ( const endd of entityDropdowns ) {
+		while (endd.firstChild) {
+			endd.removeChild(endd.firstChild);
 		}
-		for ( const name of railNames.open ) {
-			const opt = document.createElement("option");
-			opt.value = name;
-			opt.innerText = name;
-			ordd.appendChild(opt);
+		for ( const [name, ent] of Object.entries(s) ) {
+			if (ent.type === 'Player' || ent.type === 'Rail' || name === 'Bank') {
+				const opt = document.createElement("option");
+				opt.value = name;
+				opt.innerText = name;
+				pdd.appendChild(opt);
+			}
+		}
+	}
+	for ( const ordd of railDropdowns ) {
+		if (ordd) {
+			while (ordd.firstChild) {
+				ordd.removeChild(ordd.firstChild);
+			}
+			for ( const name of railNames.open ) {
+				const opt = document.createElement("option");
+				opt.value = name;
+				opt.innerText = name;
+				ordd.appendChild(opt);
+			}
 		}
 	}
 	for ( const tdd of trainDropdowns ) {
@@ -517,13 +576,16 @@ function go() {
 		document.getElementById("OpenRail_Name")
 	];
 	railDropdowns = [
+		document.getElementById("RaiseStock_Rail"),
+		document.getElementById("DropStock_Rail"),
 		document.getElementById("BuyTrain_Rail"),
 		document.getElementById("ShuffleTrain_From"),
 		document.getElementById("ShuffleTrain_To"),
 		document.getElementById("Issue_Rail"),
 		document.getElementById("Redeem_Rail"),
 		document.getElementById("PayFull_Rail"),
-		document.getElementById("PayHalf_Rail")
+		document.getElementById("PayHalf_Rail"),
+		document.getElementById("OR_Rail")
 	];
 	potentialRailDropdowns = [
 		document.getElementById("OpenRail_Rail")
@@ -532,20 +594,26 @@ function go() {
 		document.getElementById("BuyTrain_Train"),
 		document.getElementById("ShuffleTrain_Train")
 	];
-	AttachUX();
+	entityDropdowns = [
+
+	];
+	
+	AttachUX("UI", []);
+	AttachUX("OR", ["Rail"]);
 	render();
 }
 
-function AttachUX() {
-	const root = document.getElementById("UI");
+function AttachUX(prefix, suffices) {
+	const root = document.getElementById(prefix);
+	const globalGetters = suffices.flatMap(getGlobalValueGetter(prefix));
 	for ( const actionDiv of root.children ) {
-		attachActionUX(actionDiv);
+		attachActionUX(actionDiv, globalGetters);
 	}
 }
 
-function attachActionUX(actionDiv) {
+function attachActionUX(actionDiv, globalGetters) {
 	const action = actionDiv.id;
-	const getters = [];
+	const getters = globalGetters.slice(0);
 	let button;
 	for ( const uiElement of actionDiv.children ) {
 		getters.push(...getValueGetter(action, uiElement));
@@ -561,6 +629,8 @@ function attachActionUX(actionDiv) {
 		});
 	}
 }
+
+const getGlobalValueGetter = (prefix) => (suffix) => getValueGetter(prefix, document.getElementById(prefix + "_" + suffix));
 
 function getValueGetter(action, uiElement) {
 	const found = new RegExp(action + "_(.*)").exec(uiElement.id);
@@ -617,12 +687,24 @@ function SetupGame({A, B, C, D, E}) {
 	DoUserAction(setupGame([A, B, C, D, E]));
 }
 
+function RaiseStock({Rail}) {
+	DoUserAction(new StockMoveTransaction(Rail, 1));
+}
+
+function DropStock({Rail}) {
+	DoUserAction(new StockMoveTransaction(Rail, -1));
+}
+
+function FloatAndSink() {
+	DoUserAction(floatAndSink());
+}
+
 function BuyTrain({Rail, Train}) {
 	DoUserAction(buyTrain(Rail, Train));
 }
 
-function ShuffleTrain({To, From, Train, Price}) {
-	DoUserAction(shuffleTrain(To, From, Train, Price));
+function ShuffleTrain({Rail, From, Train, Price}) {
+	DoUserAction(shuffleTrain(Rail, From, Train, Price));
 }
 
 function Issue({Rail}) {
@@ -645,6 +727,13 @@ function Withhold({Rail, RtA}) {
 	DoUserAction(withhold(Rail, RtA));
 }
 
+function PayBankTwenty({Rail}) {
+	const From = Rail;
+	const To = 'Bank';
+	const Amount = 20;
+	Give({From, To, Amount});
+}
+
 function Sell({Buyer, Seller, Holding, Count, Price}) {
 	DoUserAction(sale(Buyer, Seller, Holding, Count, Price));
 }
@@ -653,114 +742,250 @@ function Give({From, To, Amount}) {
 	DoUserAction(giveCash(From, To, Amount));
 }
 
+let SRUIContext = {p: null, r: null};
+
+function SRUI(e, p, r) {
+	const el = document.getElementById("SRUI");
+	SRUIContext = {p, r};
+	el.style.left = e.clientX + 10 + 'px';
+	el.style.top = e.clientY + 10 + 'px';
+	el.style.display = 'block';
+}
+
+function SRUIBank() {
+	const Buyer = SRUIContext.p;
+	const Holding = SRUIContext.r;
+	const Seller = 'Bank';
+	const Count = 1;
+	const Price = TransactionState[Holding].Price;
+	Sell({Buyer, Seller, Holding, Count, Price});
+}
+
+function SRUIRail() {
+	const Buyer = SRUIContext.p;
+	const Holding = SRUIContext.r;
+	const Seller = Holding;
+	const Count = 1;
+	const Price = TransactionState[Holding].Price;
+	Sell({Buyer, Seller, Holding, Count, Price});
+}
+
+function SRUISell() {
+	const Buyer = 'Bank';
+	const Holding = SRUIContext.r;
+	const Seller = SRUIContext.p;
+	const Count = 1;
+	const Price = TransactionState[Holding].Price;
+	Sell({Buyer, Seller, Holding, Count, Price});
+}
+
+const UIList = ['UI', 'OR'];
+
+function showUI(toShow) {
+	for ( const ui of UIList ) {
+		document.getElementById(ui).style.display = "none";
+	}
+	document.getElementById(toShow).style.display = "block";
+}
+
 </script>
 </head>
+
+<!--
+TODO:
+- Minor company representation and payouts
+- Gameflow UI
+	- Setup
+		- Setup
+		- Private assignment
+	- Operating round
+		- Apply private payouts
+		- For rail...
+			- Lay track
+			- Lay token
+			- Buy private
+- Train tracking with phase detection and rusting
+-->
+
 <body onload="go()">
-	<div id="Root"></div>
+	<div id="SRUI" style='display: none;'>
+		<button onclick="SRUIBank()">From Bank</button>
+		<button onclick="SRUIRail()">From Rail</button>
+		<button onclick="SRUISell()">Sell</button>
+	</div>
 	<div id="LogHolder" onclick="toggleLogs()">
 		Log
 		<div id="Log"></div>
 	</div>
-	<div id="UI">
-		<div class="long" id="SetupGame">
-			<label for="SetupGame_A">Player 1: </label>
-			<input type="text" id="SetupGame_A"></input>
-			<label for="SetupGame_B">Player 2: </label>
-			<input type="text" id="SetupGame_B"></input>
-			<label for="SetupGame_C">Player 3: </label>
-			<input type="text" id="SetupGame_C"></input>
-			<label for="SetupGame_D">Player 4: </label>
-			<input type="text" id="SetupGame_D"></input>
-			<label for="SetupGame_E">Player 5: </label>
-			<input type="text" id="SetupGame_E"></input>
-			<div class="spacer"></div>
-			<button>Set up game</button>
-		</div><div id="OpenRail">
-			<label for="OpenRail_Name">Player: </label>
-			<select id="OpenRail_Name"></select>
-			<label for="OpenRail_Rail">Rail: </label>
-			<select id="OpenRail_Rail"></select>
-			<label for="OpenRail_Price">Price: </label>
-			<input type="number" required="true" id="OpenRail_Price"></input>
-			<div class="spacer"></div>
-			<button>Open Rail</button>
-		</div><div id="UndoUserAction" class="short">
-			<div class="spacer"></div>
-			<button>Undo</button>
-		</div><div id="RedoUserAction" class="short">
-			<div class="spacer"></div>
-			<button>Redo</button>
-		</div><div id="BuyTrain">
-			<label for="BuyTrain_Rail">Rail: </label>
-			<select id="BuyTrain_Rail"></select>
-			<label for="BuyTrain_Train">Train: </label>
-			<select id="BuyTrain_Train"></select>
-			<div class="spacer"></div>
-			<button>Buy Train</button>
-		</div><div id="ShuffleTrain">
-			<label for="ShuffleTrain_From">From: </label>
-			<select id="ShuffleTrain_From"></select>
-			<label for="ShuffleTrain_To">To: </label>
-			<select id="ShuffleTrain_To"></select>
-			<label for="ShuffleTrain_Train">Train: </label>
-			<select id="ShuffleTrain_Train"></select>
-			<label for="ShuffleTrain_Price">Price: </label>
-			<input type="number" id="ShuffleTrain_Price"></input>
-			<div class="spacer"></div>
-			<button>Shuffle Train</button>
-		</div><div id="Issue">
-			<label for="Issue_Rail">Rail: </label>
-			<select id="Issue_Rail"></select>
-			<div class="spacer"></div>
-			<button>Issue Share</button>
-		</div><div id="Redeem">
-			<label for="Redeem_Rail">Rail: </label>
-			<select id="Redeem_Rail"></select>
-			<div class="spacer"></div>
-			<button>Redeem Share</button>
-		</div><div id="PayFull">
-			<label for="PayFull_Rail">Rail: </label>
-			<select id="PayFull_Rail"></select>
-			<label for="PayFull_RtA">Route:</label>
-			<input type="number" id="PayFull_RtA"></input>
-			<div class="spacer"></div>
-			<button>Pay Full</button>
-		</div><div id="PayHalf">
-			<label for="PayHalf_Rail">Rail: </label>
-			<select id="PayHalf_Rail"></select>
-			<label for="PayHalf_RtA">Route:</label>
-			<input type="number" id="PayHalf_RtA"></input>
-			<div class="spacer"></div>
-			<button>Pay Half</button>
-		</div><div id="Withhold">
-			<label for="Withhold_Rail">Rail: </label>
-			<select id="Withhold_Rail"></select>
-			<label for="Withhold_RtA">Route:</label>
-			<input type="number" id="Withhold_RtA"></input>
-			<div class="spacer"></div>
-			<button>Withhold</button>
-		</div><div id="Give">
-			<label for="GiveFrom">Giver: </label>
-			<input type="text" id="GiveFrom"></input>
-			<label for="GiveTo">Taker: </label>
-			<input type="text" id="GiveTo"></input>
-			<label for="GiveAmount">Amount: </label>
-			<input type="number" id="GiveAmount"></input>
-			<div class="spacer"></div>
-			<button>Give Cash</button>
-		</div><div id="Sell" class="long">
-			<label for="Sell_Buyer">Buyer: </label>
-			<input type="text" id="Sell_Buyer"></input>
-			<label for="Sell_Seller">Seller: </label>
-			<input type="text" id="Sell_Seller"></input>
-			<label for="Sell_Holding">Holding: </label>
-			<input type="text" id="Sell_Holding"></input>
-			<label for="Sell_Count">Count:</label>
-			<input type="number" id="Sell_Count"></input>
-			<label for="Sell_Price">Price Per:</label>
-			<input type="number" id="Sell_Price"></input>
-			<div class="spacer"></div>
-			<button>Sell</button>
+	<div id="MainHolder">
+		<div id="Root"></div>
+		<div class="spacer"></div>
+		<div id="OR" class="UI" style="display: none">
+			<div id="RailSelect">
+				<label for="OR_Rail">Rail: </label>
+				<select id="OR_Rail"></select>
+			</div><div id="PayBankTwenty">
+				<div class="spacer"></div>
+				<button>Pay Bank 20</button>
+			</div><div id="BuyTrain">
+				<label for="BuyTrain_Train">Train: </label>
+				<select id="BuyTrain_Train"></select>
+				<div class="spacer"></div>
+				<button>Buy Train</button>
+			</div><div id="ShuffleTrain">
+				<label for="ShuffleTrain_From">From: </label>
+				<select id="ShuffleTrain_From"></select>
+				<label for="ShuffleTrain_Train">Train: </label>
+				<select id="ShuffleTrain_Train"></select>
+				<label for="ShuffleTrain_Price">Price: </label>
+				<input type="number" id="ShuffleTrain_Price"></input>
+				<div class="spacer"></div>
+				<button>Shuffle Train</button>
+			</div><div id="Issue" class="short">
+				<div class="spacer"></div>
+				<button>Issue Share</button>
+			</div><div id="Redeem" class="short">
+				<div class="spacer"></div>
+				<button>Redeem Share</button>
+			</div><div id="PayFull">
+				<label for="PayFull_RtA">Route:</label>
+				<input type="number" id="PayFull_RtA"></input>
+				<div class="spacer"></div>
+				<button>Pay Full</button>
+			</div><div id="PayHalf">
+				<label for="PayHalf_RtA">Route:</label>
+				<input type="number" id="PayHalf_RtA"></input>
+				<div class="spacer"></div>
+				<button>Pay Half</button>
+			</div><div id="Withhold">
+				<label for="Withhold_RtA">Route:</label>
+				<input type="number" id="Withhold_RtA"></input>
+				<div class="spacer"></div>
+				<button>Withhold</button>
+			</div>
+		</div>
+		<div id="UI" class="UI">
+			<div class="long" id="SetupGame">
+				<label for="SetupGame_A">Player 1: </label>
+				<input type="text" id="SetupGame_A"></input>
+				<label for="SetupGame_B">Player 2: </label>
+				<input type="text" id="SetupGame_B"></input>
+				<label for="SetupGame_C">Player 3: </label>
+				<input type="text" id="SetupGame_C"></input>
+				<label for="SetupGame_D">Player 4: </label>
+				<input type="text" id="SetupGame_D"></input>
+				<label for="SetupGame_E">Player 5: </label>
+				<input type="text" id="SetupGame_E"></input>
+				<div class="spacer"></div>
+				<button>Set up game</button>
+			</div><div id="OpenRail">
+				<label for="OpenRail_Name">Player: </label>
+				<select id="OpenRail_Name"></select>
+				<label for="OpenRail_Rail">Rail: </label>
+				<select id="OpenRail_Rail"></select>
+				<label for="OpenRail_Price">Price: </label>
+				<input type="number" required="true" id="OpenRail_Price"></input>
+				<div class="spacer"></div>
+				<button>Open Rail</button>
+			</div><div id="UndoUserAction" class="short">
+				<div class="spacer"></div>
+				<button>Undo</button>
+			</div><div id="RedoUserAction" class="short">
+				<div class="spacer"></div>
+				<button>Redo</button>
+			</div><div id="RaiseStock" class="short">
+				<label for="RaiseStock_Rail">Rail: </label>
+				<select id="RaiseStock_Rail"></select>
+				<div class="spacer"></div>
+				<button>Raise Stock</button>
+			</div><div id="DropStock" class="short">
+				<label for="DropStock_Rail">Rail: </label>
+				<select id="DropStock_Rail"></select>
+				<div class="spacer"></div>
+				<button>Drop Stock</button>
+			</div><div id="FloatAndSink">
+				<div class="spacer"></div>
+				<button>Float/Sink</button>
+			</div><div id="Give">
+				<label for="Give_From">Giver: </label>
+				<input type="text" id="GiveFrom"></input>
+				<label for="Give_To">Taker: </label>
+				<input type="text" id="GiveTo"></input>
+				<label for="Give_Amount">Amount: </label>
+				<input type="number" id="GiveAmount"></input>
+				<div class="spacer"></div>
+				<button>Give Cash</button>
+			</div><div id="Sell" class="long">
+				<label for="Sell_Buyer">Buyer: </label>
+				<input type="text" id="Sell_Buyer"></input>
+				<label for="Sell_Seller">Seller: </label>
+				<input type="text" id="Sell_Seller"></input>
+				<label for="Sell_Holding">Holding: </label>
+				<input type="text" id="Sell_Holding"></input>
+				<label for="Sell_Count">Count:</label>
+				<input type="number" id="Sell_Count"></input>
+				<label for="Sell_Price">Price Per:</label>
+				<input type="number" id="Sell_Price"></input>
+				<div class="spacer"></div>
+				<button>Sell</button>
+			</div>
+	<!--		<hr/>
+			<div id="BuyTrain">
+				<label for="BuyTrain_Rail">Rail: </label>
+				<select id="BuyTrain_Rail"></select>
+				<label for="BuyTrain_Train">Train: </label>
+				<select id="BuyTrain_Train"></select>
+				<div class="spacer"></div>
+				<button>Buy Train</button>
+			</div><div id="ShuffleTrain">
+				<label for="ShuffleTrain_To">To: </label>
+				<select id="ShuffleTrain_To"></select>
+				<label for="ShuffleTrain_From">From: </label>
+				<select id="ShuffleTrain_From"></select>
+				<label for="ShuffleTrain_Train">Train: </label>
+				<select id="ShuffleTrain_Train"></select>
+				<label for="ShuffleTrain_Price">Price: </label>
+				<input type="number" id="ShuffleTrain_Price"></input>
+				<div class="spacer"></div>
+				<button>Shuffle Train</button>
+			</div><div id="Issue" class="short">
+				<label for="Issue_Rail">Rail: </label>
+				<select id="Issue_Rail"></select>
+				<div class="spacer"></div>
+				<button>Issue Share</button>
+			</div><div id="Redeem" class="short">
+				<label for="Redeem_Rail">Rail: </label>
+				<select id="Redeem_Rail"></select>
+				<div class="spacer"></div>
+				<button>Redeem Share</button>
+			</div><div id="PayFull">
+				<label for="PayFull_Rail">Rail: </label>
+				<select id="PayFull_Rail"></select>
+				<label for="PayFull_RtA">Route:</label>
+				<input type="number" id="PayFull_RtA"></input>
+				<div class="spacer"></div>
+				<button>Pay Full</button>
+			</div><div id="PayHalf">
+				<label for="PayHalf_Rail">Rail: </label>
+				<select id="PayHalf_Rail"></select>
+				<label for="PayHalf_RtA">Route:</label>
+				<input type="number" id="PayHalf_RtA"></input>
+				<div class="spacer"></div>
+				<button>Pay Half</button>
+			</div><div id="Withhold">
+				<label for="Withhold_Rail">Rail: </label>
+				<select id="Withhold_Rail"></select>
+				<label for="Withhold_RtA">Route:</label>
+				<input type="number" id="Withhold_RtA"></input>
+				<div class="spacer"></div>
+				<button>Withhold</button>
+			</div>-->
+		</div>
+		<div id="UI-Selection">
+			<div>
+				<button onclick="showUI('UI')">Admin</button>
+				<button onclick="showUI('OR')">Operating Round</button>
+			</div>
 		</div>
 	</div>
 </body>
