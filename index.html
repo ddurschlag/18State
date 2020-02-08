@@ -6,10 +6,9 @@ body, html {
 	overflow: visible;
 }
 td, th {
-	padding: 2px;
+	padding: 2px 15px 2px 15px;
 	margin: 2px;
 	text-align: left;
-	width: 96px;
 }
 #LogHolder {
 	position: fixed;
@@ -257,6 +256,19 @@ const allPlayers = (action, reversal, msg) => {
 	);
 };
 
+const allRails = (action, reversal, msg) => {
+	return new TransactionSequence(
+		(s) => {
+			const actions = [];
+			for ( const name in s ) {
+				if ( s[name].type === 'Rail' ) actions.push(new OnEntityTransaction(name, action, reversal, msg));
+			}
+			return actions;
+		},
+		'for all players...'
+	);
+};
+
 // Porcelain below, Plumbing above
 
 const addBank = (amt) => new TransactionSequence(
@@ -277,14 +289,22 @@ const addPlayer = (name, startingCash) => new TransactionSequence(
 );
 
 const addRail = (name, price) => new TransactionSequence(
-	() => [
-		new AddEntityTransaction(name, 'Rail'),
-		initEntityHolding(name, "Cash", 0),
-		initEntityHolding(name, name, 10),
-		initEntityHolding(name, 'Price', price),
-		allPlayers(...initProp(name, 0)),
-		initEntityHolding('Bank', name, 0)
-	],
+	(s) => {
+		const actions = [
+			new AddEntityTransaction(name, 'Rail'),
+			initEntityHolding(name, "Cash", 0),
+			initEntityHolding(name, name, 10),
+			initEntityHolding(name, 'Price', price),
+			allPlayers(...initProp(name, 0)),
+			initEntityHolding('Bank', name, 0)
+		];
+		for ( const railOwnable in s ) {
+			if (["Private", "Train"].includes(s[railOwnable].type)) {
+				actions.push(initEntityHolding(name, railOwnable, 0));
+			}
+		}
+		return actions;
+	},
 	`creating rail ${name}`
 );
 
@@ -295,6 +315,26 @@ const addTrain = (name, price) => new TransactionSequence(
 	],
 	`adding train type ${name} for ${price}`
 );
+
+const addPrivate = (name, income, price) => new TransactionSequence(
+	() => [
+		new AddEntityTransaction(name, 'Private'),
+		initEntityHolding(name, 'Income', income),
+		initEntityHolding('Bank', name, 1),
+		allPlayers(...initProp(name, 0))
+	],
+	`creating private company ${name} with ${income} income and ${price} base cost`
+);
+
+const addMini = (name, price) => new TransactionSequence(
+	() => [
+		new AddEntityTransaction(name, 'Mini'),
+		initEntityHolding('Bank', name, 1),
+		allPlayers(...initProp(name, 0))
+	],
+	`creating miniature company ${name} with ${price} base cost`
+);
+
 
 const bankSizes = [6500, 7500, 9000];
 
@@ -310,7 +350,17 @@ const setupGame = (players) => new TransactionSequence(
 			addTrain('5', 500),
 			addTrain('4/6', 450),
 			addTrain('6', 800),
-			addTrain('7/8', 900)
+			addTrain('7/8', 900),
+			addPrivate('Mail', 0, 80),
+			addPrivate('Lake', 15, 40),
+			addPrivate('Meat', 15, 60),
+			addPrivate('Steamboat', 10, 40),
+			addPrivate('Ohio', 15, 40),
+			addPrivate('Chicago', 10, 60),
+			addPrivate('Central', 15, 40),
+			addPrivate('Tunnel', 20, 60),
+			addMini('Big 4', 0, 100),
+			addMini('Southern', 0, 140)
 		]
 	},
 	`Set up game for ${players.filter(p=>p).length} players`
@@ -392,6 +442,23 @@ const redeem = (rail) => new TransactionSequence(
 	`${rail} redeemed a share`
 );
 
+const payPrivates = () => new TransactionSequence(
+	(s) => {
+		const actions = [];
+		for ( const name in s ) {
+			if ( s[name].type === 'Private' ) {
+				for ( const ownerName in s ) {
+					if ( s[ownerName][name] > 0 ) {
+						actions.push(giveCash('Bank', ownerName, s[name].Income));
+					}
+				}
+			}
+		}
+		return actions;
+	},
+	`Paid out privates`
+);
+
 const payFull = (rail, amt) => new TransactionSequence(
 	(s) => {
 		const actions = [new StockMoveTransaction(rail, getStockOperation(s[rail]['Price'], amt))];
@@ -442,6 +509,13 @@ const getStockOperation = (price, payOut) => {
 </script>
 <script>
 function getViewModel(s) {
+	const privates = []
+	for ( const [name, ent] of Object.entries(s) ) {
+		if ( ent.type === 'Private' || ent.type === 'Mini' ) {
+			privates.push(name);
+		}
+	}
+
 	const railNames = [];
 	for ( const [name, ent] of Object.entries(s) ) {
 		if ( ent.type === 'Rail' ) {
@@ -456,11 +530,18 @@ function getViewModel(s) {
 			for ( const n of railNames ) {
 				r[n] = ent[n]
 			}
+			const rPrivs = [];
+			for ( const priv of privates ) {
+				if ( ent[priv] > 0 ) {
+					rPrivs.push(priv);
+				}
+			}
+			r["Privates"] = rPrivs.join(", ");
 			rails.push(r);
 		}
 	}
 	rails.sort((a,b) => b.Price - a.Price);
-	let railKeys = ['name', 'Price', 'Cash', ...railNames];
+	let railKeys = ['name', 'Price', 'Cash', ...railNames, "Privates"];
 	rails = rails.map((r) => railKeys.map((k) => r[k]));
 
 	let players = [];
@@ -471,15 +552,23 @@ function getViewModel(s) {
 				const held = ent[railName];
 				p[railName] = `<span onclick="SRUI(event, '${playerName}', '${railName}')">${held}</span>`;
 			}
+			const pPrivs = [];
+			for ( const priv of privates ) {
+				if ( ent[priv] > 0 ) {
+					pPrivs.push(priv);
+				}
+			}
+			p["Privates"] = pPrivs.join(", ");
 			players.push(p);
 		}
 	}
 	players.sort((a,b) => b.Worth - a.Worth);
-	let playerKeys = ['name', 'Worth', 'Cash', ...railNames];
+	let playerKeys = ['name', 'Worth', 'Cash', ...railNames, "Privates"];
 	players = players.map((p) => playerKeys.map((k) => p[k]));
 
-	const bank = ['Bank', '', s.Bank ? s.Bank.Cash : 0, ...railNames.map((rn)=>s.Bank[rn])];
-	const bankKeys = ['name', '', 'Cash', ...railNames];
+	const bank = ['Bank', '', s.Bank ? s.Bank.Cash : 0, ...railNames.map((rn)=>s.Bank[rn]), privates.filter((p) => s.Bank[p] > 0).join(", ")];
+
+	const bankKeys = ['name', '', 'Cash', ...railNames, "Privates"];
 
 	return {rails, players, bank, railKeys, playerKeys, bankKeys};
 }
@@ -535,12 +624,10 @@ function render(s = TransactionState) {
 			endd.removeChild(endd.firstChild);
 		}
 		for ( const [name, ent] of Object.entries(s) ) {
-			if (ent.type === 'Player' || ent.type === 'Rail' || name === 'Bank') {
-				const opt = document.createElement("option");
-				opt.value = name;
-				opt.innerText = name;
-				pdd.appendChild(opt);
-			}
+			const opt = document.createElement("option");
+			opt.value = name;
+			opt.innerText = name;
+			endd.appendChild(opt);
 		}
 	}
 	for ( const ordd of railDropdowns ) {
@@ -561,7 +648,7 @@ function render(s = TransactionState) {
 			tdd.removeChild(tdd.firstChild);
 		}
 		for ( const [name, ent] of Object.entries(s) ) {
-			if (ent.type === 'Train') {
+			if (ent.type === 'Train' || ent.type === 'Mini') {
 				const opt = document.createElement("option");
 				opt.value = name;
 				opt.innerText = name;
@@ -595,7 +682,7 @@ function go() {
 		document.getElementById("ShuffleTrain_Train")
 	];
 	entityDropdowns = [
-
+		document.getElementById("Sell_Holding")
 	];
 	
 	AttachUX("UI", []);
@@ -717,6 +804,10 @@ function Redeem({Rail}) {
 
 function PayFull({Rail, RtA}) {
 	DoUserAction(payFull(Rail, RtA));
+}
+
+function PayPrivates({}) {
+	DoUserAction(payPrivates());
 }
 
 function PayHalf({Rail, RtA}) {
@@ -915,13 +1006,16 @@ TODO:
 				<input type="number" id="GiveAmount"></input>
 				<div class="spacer"></div>
 				<button>Give Cash</button>
+			</div><div id="PayPrivates">
+				<div class="spacer"></div>
+				<button>Pay Privates</button>				
 			</div><div id="Sell" class="long">
 				<label for="Sell_Buyer">Buyer: </label>
 				<input type="text" id="Sell_Buyer"></input>
 				<label for="Sell_Seller">Seller: </label>
 				<input type="text" id="Sell_Seller"></input>
 				<label for="Sell_Holding">Holding: </label>
-				<input type="text" id="Sell_Holding"></input>
+				<select id="Sell_Holding"></select>
 				<label for="Sell_Count">Count:</label>
 				<input type="number" id="Sell_Count"></input>
 				<label for="Sell_Price">Price Per:</label>
@@ -929,57 +1023,6 @@ TODO:
 				<div class="spacer"></div>
 				<button>Sell</button>
 			</div>
-	<!--		<hr/>
-			<div id="BuyTrain">
-				<label for="BuyTrain_Rail">Rail: </label>
-				<select id="BuyTrain_Rail"></select>
-				<label for="BuyTrain_Train">Train: </label>
-				<select id="BuyTrain_Train"></select>
-				<div class="spacer"></div>
-				<button>Buy Train</button>
-			</div><div id="ShuffleTrain">
-				<label for="ShuffleTrain_To">To: </label>
-				<select id="ShuffleTrain_To"></select>
-				<label for="ShuffleTrain_From">From: </label>
-				<select id="ShuffleTrain_From"></select>
-				<label for="ShuffleTrain_Train">Train: </label>
-				<select id="ShuffleTrain_Train"></select>
-				<label for="ShuffleTrain_Price">Price: </label>
-				<input type="number" id="ShuffleTrain_Price"></input>
-				<div class="spacer"></div>
-				<button>Shuffle Train</button>
-			</div><div id="Issue" class="short">
-				<label for="Issue_Rail">Rail: </label>
-				<select id="Issue_Rail"></select>
-				<div class="spacer"></div>
-				<button>Issue Share</button>
-			</div><div id="Redeem" class="short">
-				<label for="Redeem_Rail">Rail: </label>
-				<select id="Redeem_Rail"></select>
-				<div class="spacer"></div>
-				<button>Redeem Share</button>
-			</div><div id="PayFull">
-				<label for="PayFull_Rail">Rail: </label>
-				<select id="PayFull_Rail"></select>
-				<label for="PayFull_RtA">Route:</label>
-				<input type="number" id="PayFull_RtA"></input>
-				<div class="spacer"></div>
-				<button>Pay Full</button>
-			</div><div id="PayHalf">
-				<label for="PayHalf_Rail">Rail: </label>
-				<select id="PayHalf_Rail"></select>
-				<label for="PayHalf_RtA">Route:</label>
-				<input type="number" id="PayHalf_RtA"></input>
-				<div class="spacer"></div>
-				<button>Pay Half</button>
-			</div><div id="Withhold">
-				<label for="Withhold_Rail">Rail: </label>
-				<select id="Withhold_Rail"></select>
-				<label for="Withhold_RtA">Route:</label>
-				<input type="number" id="Withhold_RtA"></input>
-				<div class="spacer"></div>
-				<button>Withhold</button>
-			</div>-->
 		</div>
 		<div id="UI-Selection">
 			<div>
