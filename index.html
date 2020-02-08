@@ -635,7 +635,7 @@ function render(s = TransactionState) {
 			while (ordd.firstChild) {
 				ordd.removeChild(ordd.firstChild);
 			}
-			for ( const name of railNames.open ) {
+			for ( const name of [...(railNames.open), "Big 4", "Southern"] ) {
 				const opt = document.createElement("option");
 				opt.value = name;
 				opt.innerText = name;
@@ -648,7 +648,7 @@ function render(s = TransactionState) {
 			tdd.removeChild(tdd.firstChild);
 		}
 		for ( const [name, ent] of Object.entries(s) ) {
-			if (ent.type === 'Train' || ent.type === 'Mini') {
+			if (ent.type === 'Train') {
 				const opt = document.createElement("option");
 				opt.value = name;
 				opt.innerText = name;
@@ -888,9 +888,7 @@ TODO:
 - Gameflow UI
 	- Setup
 		- Setup
-		- Private assignment
 	- Operating round
-		- Apply private payouts
 		- For rail...
 			- Lay track
 			- Lay token
