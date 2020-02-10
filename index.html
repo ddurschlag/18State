@@ -95,6 +95,24 @@ div.UI div label {
 	width: 86px;
 	display:inline-block;
 }
+option.Bank {
+	background-color: #eeffee;
+}
+option.Player {
+	background-color: #eeeeff;
+}
+option.Rail {
+	background-color: #ffeeee;
+}
+option.Train {
+	background-color: #ffffee;
+}
+option.Private {
+	background-color: #ffeeff;
+}
+option.Mini {
+	background-color: #eeffff;
+}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/handlebars.js/4.5.3/handlebars.js"></script>
 
@@ -580,6 +598,8 @@ function getRailNames(s) {
 	for ( const rail of railNames ) {
 		(s[rail] ? open : potential).push(rail);
 	}
+	open.sort();
+	potential.sort();
 	return {open, potential};
 }
 
@@ -623,10 +643,11 @@ function render(s = TransactionState) {
 		while (endd.firstChild) {
 			endd.removeChild(endd.firstChild);
 		}
-		for ( const [name, ent] of Object.entries(s) ) {
+		for ( const name of Object.entries(s).sort(compareEntries).map((pair)=>pair[0]) ) {
 			const opt = document.createElement("option");
 			opt.value = name;
 			opt.innerText = name;
+			opt.className = s[name].type;
 			endd.appendChild(opt);
 		}
 	}
@@ -657,6 +678,14 @@ function render(s = TransactionState) {
 		}
 	}
 }
+
+function compareEntries([aName, aEnt], [bName, bEnt]) {
+	if (aEnt.type === bEnt.type) {
+		return aName < bName ? -1 : aName > bName ? 1 : 0;
+	}
+	return aEnt.type < bEnt.type ? -1 : aEnt.type > bEnt.type ? 1 : 0;
+}
+
 function go() {
 	initTemplates();
 	playerDropdowns = [
@@ -879,6 +908,10 @@ function showUI(toShow) {
 	document.getElementById(toShow).style.display = "block";
 }
 
+function SetDefaultPrice(p) {
+	document.getElementById("Sell_Price").value = TransactionState[p].Price || "" ;
+}
+
 </script>
 </head>
 
@@ -1013,7 +1046,7 @@ TODO:
 				<label for="Sell_Seller">Seller: </label>
 				<input type="text" id="Sell_Seller"></input>
 				<label for="Sell_Holding">Holding: </label>
-				<select id="Sell_Holding"></select>
+				<select id="Sell_Holding" onchange="SetDefaultPrice(event.target.value)"></select>
 				<label for="Sell_Count">Count:</label>
 				<input type="number" id="Sell_Count"></input>
 				<label for="Sell_Price">Price Per:</label>
