@@ -37,21 +37,22 @@ td, th {
 	width: 100px;
 	height: 50px;
 }
-#UI-Selection {
-	width: 1800px;
-	background-color: #ffd0d0;
-	padding: 3px;
-}
 #RailSelect {
-	border: 3px outset #a070d0;
-	background-color: #e0e0ff;
+	border: 3px outset #a0d070;
+	background-color: #e0ffe0;
 	font-weight: bold;
+	width: 878px;
 }
 div.UI {
 	z-index: 50;
-	background-color: #d0d0ff;
 	width: 1800px;
 	padding: 3px;
+}
+div#UI {
+	background-color: #d0d0ff;
+}
+div#OR {
+	background-color: #d0ffd0;
 }
 #MainHolder {
 	display: flex;
@@ -112,6 +113,12 @@ option.Private {
 }
 option.Mini {
 	background-color: #eeffff;
+}
+option.Cash {
+	background-color: #ffffff;
+}
+span.empty {
+	color: #aaa;
 }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/handlebars.js/4.5.3/handlebars.js"></script>
@@ -287,8 +294,6 @@ const allRails = (action, reversal, msg) => {
 	);
 };
 
-// Porcelain below, Plumbing above
-
 const addBank = (amt) => new TransactionSequence(
 	() => [
 		new AddEntityTransaction('Bank', 'Bank'),
@@ -339,18 +344,23 @@ const addPrivate = (name, income, price) => new TransactionSequence(
 		new AddEntityTransaction(name, 'Private'),
 		initEntityHolding(name, 'Income', income),
 		initEntityHolding('Bank', name, 1),
+		initEntityHolding(name, 'Price', price),
 		allPlayers(...initProp(name, 0))
 	],
 	`creating private company ${name} with ${income} income and ${price} base cost`
 );
 
-const addMini = (name, price) => new TransactionSequence(
+const addMini = (name, holdings, debt) => new TransactionSequence(
 	() => [
 		new AddEntityTransaction(name, 'Mini'),
+		initEntityHolding(name, "Cash", 0),
 		initEntityHolding('Bank', name, 1),
+		initEntityHolding(name, name, 1),
+		initEntityHolding(name, 'Price', holdings + debt),
+		giveCash('Bank', name, holdings),
 		allPlayers(...initProp(name, 0))
 	],
-	`creating miniature company ${name} with ${price} base cost`
+	`creating miniature company ${name} with ${holdings} holdings and ${debt} debt`
 );
 
 
@@ -377,8 +387,8 @@ const setupGame = (players) => new TransactionSequence(
 			addPrivate('Chicago', 10, 60),
 			addPrivate('Central', 15, 40),
 			addPrivate('Tunnel', 20, 60),
-			addMini('Big 4', 0, 100),
-			addMini('Southern', 0, 140)
+			addMini('Big 4', 40, 60),
+			addMini('Southern', 60, 80)
 		]
 	},
 	`Set up game for ${players.filter(p=>p).length} players`
@@ -480,12 +490,25 @@ const payPrivates = () => new TransactionSequence(
 const payFull = (rail, amt) => new TransactionSequence(
 	(s) => {
 		const actions = [new StockMoveTransaction(rail, getStockOperation(s[rail]['Price'], amt))];
+		const divisor = 10;
 		for ( const name in s ) {
-			if ( s[name][rail] ) actions.push(giveCash('Bank', name, s[name][rail] * amt/10));
+			if ( s[name][rail] ) actions.push(giveCash('Bank', name, s[name][rail] * amt/divisor));
 		}
 		return actions;
 	},
 	`${rail} full-paid ${amt}`
+);
+
+const payMini = (rail, amt) => new TransactionSequence(
+	(s) => {
+		const actions = [];
+		const divisor = 2;
+		for ( const name in s ) {
+			if ( s[name][rail] ) actions.push(giveCash('Bank', name, s[name][rail] * amt/divisor));
+		}
+		return actions;
+	},
+	`Mini ${rail} split ${amt}`
 );
 
 const payHalf = (rail, amt) => new TransactionSequence(
@@ -543,7 +566,7 @@ function getViewModel(s) {
 
 	let rails = [];
 	for ( const [name, ent] of Object.entries(s) ) {
-		if ( ent.type === 'Rail' ) {
+		if ( ent.type === 'Rail' || ent.type === 'Mini' ) {
 			const r = {name, Price: ent.Price, Cash: ent.Cash};
 			for ( const n of railNames ) {
 				r[n] = ent[n]
@@ -568,7 +591,8 @@ function getViewModel(s) {
 			const p = {name: playerName, Worth: railNames.reduce((sum, n)=>sum + ent[n] * s[n].Price, ent.Cash), Cash: ent.Cash};
 			for ( const railName of railNames ) {
 				const held = ent[railName];
-				p[railName] = `<span onclick="SRUI(event, '${playerName}', '${railName}')">${held}</span>`;
+				const emptyClass = !held ? " class='empty'" : "";
+				p[railName] = `<span onclick="SRUI(event, '${playerName}', '${railName}')"${emptyClass}>${held}</span>`;
 			}
 			const pPrivs = [];
 			for ( const priv of privates ) {
@@ -607,7 +631,8 @@ let playerDropdowns = [];
 let railDropdowns = [];
 let potentialRailDropdowns = [];
 let trainDropdowns = [];
-let entityDropdowns = [];
+let actorDropdowns = [];
+let holdingDropdowns = [];
 
 function render(s = TransactionState) {
 	document.getElementById("SRUI").style.display = 'none';
@@ -615,6 +640,7 @@ function render(s = TransactionState) {
 	document.getElementById("Root").innerHTML = templates["tRoot"](state);
 	document.getElementById("Log").innerHTML = templates["tLog"](TransactionLog);
 	for ( const pdd of playerDropdowns ) {
+		const oldValue = pdd.value;
 		while (pdd.firstChild) {
 			pdd.removeChild(pdd.firstChild);
 		}
@@ -623,12 +649,16 @@ function render(s = TransactionState) {
 				const opt = document.createElement("option");
 				opt.value = name;
 				opt.innerText = name;
+				if ( name === oldValue ) {
+					opt.selected = true;
+				}
 				pdd.appendChild(opt);
 			}
 		}
 	}
 	const railNames = getRailNames(s);
 	for ( const prdd of potentialRailDropdowns ) {
+		const oldValue = prdd.value;
 		while (prdd.firstChild) {
 			prdd.removeChild(prdd.firstChild);
 		}
@@ -636,23 +666,65 @@ function render(s = TransactionState) {
 			const opt = document.createElement("option");
 			opt.value = name;
 			opt.innerText = name;
+			if ( name === oldValue ) {
+				opt.selected = true;
+			}
 			prdd.appendChild(opt);
 		}
 	}
-	for ( const endd of entityDropdowns ) {
-		while (endd.firstChild) {
-			endd.removeChild(endd.firstChild);
+
+	const actors = [];
+	const holdings = [['Cash', {}]];
+
+	for ( const [name, ent] of Object.entries(s) ) {
+		if (['Player', 'Bank', 'Mini', 'Rail'].includes(ent.type)) {
+			actors.push([name, ent]);
 		}
-		for ( const name of Object.entries(s).sort(compareEntries).map((pair)=>pair[0]) ) {
+		if (['Mini', 'Private', 'Train'].includes(ent.type)) {
+			holdings.push([name, ent]);
+		}
+	}
+
+	actors.sort(compareEntries);
+	holdings.sort(compareEntries);
+
+	for ( const acdd of actorDropdowns ) {
+		const oldValue = acdd.value;
+		while (acdd.firstChild) {
+			acdd.removeChild(acdd.firstChild);
+		}
+		for ( const [name, ent] of actors ) {
 			const opt = document.createElement("option");
 			opt.value = name;
 			opt.innerText = name;
 			opt.className = s[name].type;
-			endd.appendChild(opt);
+			if ( name === oldValue ) {
+				opt.selected = true;
+			}
+			acdd.appendChild(opt);
 		}
 	}
+
+	for ( const hldd of holdingDropdowns ) {
+		const oldValue = hldd.value;
+		while (hldd.firstChild) {
+			hldd.removeChild(hldd.firstChild);
+		}
+		for ( const [name, ent] of holdings ) {
+			const opt = document.createElement("option");
+			opt.value = name;
+			opt.innerText = name;
+			opt.className = s[name] ? s[name].type : 'Cash';
+			if ( name === oldValue ) {
+				opt.selected = true;
+			}
+			hldd.appendChild(opt);
+		}
+	}
+
 	for ( const ordd of railDropdowns ) {
 		if (ordd) {
+			const oldValue = ordd.value;
 			while (ordd.firstChild) {
 				ordd.removeChild(ordd.firstChild);
 			}
@@ -660,11 +732,15 @@ function render(s = TransactionState) {
 				const opt = document.createElement("option");
 				opt.value = name;
 				opt.innerText = name;
+				if ( name === oldValue ) {
+					opt.selected = true;
+				}
 				ordd.appendChild(opt);
 			}
 		}
 	}
 	for ( const tdd of trainDropdowns ) {
+		const oldValue = tdd.value;
 		while (tdd.firstChild) {
 			tdd.removeChild(tdd.firstChild);
 		}
@@ -673,6 +749,9 @@ function render(s = TransactionState) {
 				const opt = document.createElement("option");
 				opt.value = name;
 				opt.innerText = name;
+				if ( name === oldValue ) {
+					opt.selected = true;
+				}
 				tdd.appendChild(opt);
 			}
 		}
@@ -710,7 +789,13 @@ function go() {
 		document.getElementById("BuyTrain_Train"),
 		document.getElementById("ShuffleTrain_Train")
 	];
-	entityDropdowns = [
+	actorDropdowns = [
+		document.getElementById("Sell_Buyer"),
+		document.getElementById("Sell_Seller"),
+		document.getElementById("Give_From"),
+		document.getElementById("Give_To")
+	];
+	holdingDropdowns = [
 		document.getElementById("Sell_Holding")
 	];
 	
@@ -832,7 +917,11 @@ function Redeem({Rail}) {
 }
 
 function PayFull({Rail, RtA}) {
-	DoUserAction(payFull(Rail, RtA));
+	if ( TransactionState[Rail].type === 'Mini' ) {
+		DoUserAction(payMini(Rail, RtA));
+	} else {
+		DoUserAction(payFull(Rail, RtA));
+	}
 }
 
 function PayPrivates({}) {
@@ -840,11 +929,19 @@ function PayPrivates({}) {
 }
 
 function PayHalf({Rail, RtA}) {
-	DoUserAction(payHalf(Rail, RtA));
+	if ( TransactionState[Rail].type === 'Mini' ) {
+		DoUserAction(payMini(Rail, RtA));
+	} else {
+		DoUserAction(payHalf(Rail, RtA));
+	}
 }
 
 function Withhold({Rail, RtA}) {
-	DoUserAction(withhold(Rail, RtA));
+	if ( TransactionState[Rail].type === 'Mini' ) {
+		DoUserAction(payMini(Rail, RtA));
+	} else {
+		DoUserAction(withhold(Rail, RtA));
+	}
 }
 
 function PayBankTwenty({Rail}) {
@@ -901,13 +998,6 @@ function SRUISell() {
 
 const UIList = ['UI', 'OR'];
 
-function showUI(toShow) {
-	for ( const ui of UIList ) {
-		document.getElementById(ui).style.display = "none";
-	}
-	document.getElementById(toShow).style.display = "block";
-}
-
 function SetDefaultPrice(p) {
 	document.getElementById("Sell_Price").value = TransactionState[p].Price || "" ;
 }
@@ -942,50 +1032,6 @@ TODO:
 	<div id="MainHolder">
 		<div id="Root"></div>
 		<div class="spacer"></div>
-		<div id="OR" class="UI" style="display: none">
-			<div id="RailSelect">
-				<label for="OR_Rail">Rail: </label>
-				<select id="OR_Rail"></select>
-			</div><div id="PayBankTwenty">
-				<div class="spacer"></div>
-				<button>Pay Bank 20</button>
-			</div><div id="BuyTrain">
-				<label for="BuyTrain_Train">Train: </label>
-				<select id="BuyTrain_Train"></select>
-				<div class="spacer"></div>
-				<button>Buy Train</button>
-			</div><div id="ShuffleTrain">
-				<label for="ShuffleTrain_From">From: </label>
-				<select id="ShuffleTrain_From"></select>
-				<label for="ShuffleTrain_Train">Train: </label>
-				<select id="ShuffleTrain_Train"></select>
-				<label for="ShuffleTrain_Price">Price: </label>
-				<input type="number" id="ShuffleTrain_Price"></input>
-				<div class="spacer"></div>
-				<button>Shuffle Train</button>
-			</div><div id="Issue" class="short">
-				<div class="spacer"></div>
-				<button>Issue Share</button>
-			</div><div id="Redeem" class="short">
-				<div class="spacer"></div>
-				<button>Redeem Share</button>
-			</div><div id="PayFull">
-				<label for="PayFull_RtA">Route:</label>
-				<input type="number" id="PayFull_RtA"></input>
-				<div class="spacer"></div>
-				<button>Pay Full</button>
-			</div><div id="PayHalf">
-				<label for="PayHalf_RtA">Route:</label>
-				<input type="number" id="PayHalf_RtA"></input>
-				<div class="spacer"></div>
-				<button>Pay Half</button>
-			</div><div id="Withhold">
-				<label for="Withhold_RtA">Route:</label>
-				<input type="number" id="Withhold_RtA"></input>
-				<div class="spacer"></div>
-				<button>Withhold</button>
-			</div>
-		</div>
 		<div id="UI" class="UI">
 			<div class="long" id="SetupGame">
 				<label for="SetupGame_A">Player 1: </label>
@@ -1030,11 +1076,11 @@ TODO:
 				<button>Float/Sink</button>
 			</div><div id="Give">
 				<label for="Give_From">Giver: </label>
-				<input type="text" id="GiveFrom"></input>
+				<select id="Give_From"></select>
 				<label for="Give_To">Taker: </label>
-				<input type="text" id="GiveTo"></input>
+				<select id="Give_To"></select>
 				<label for="Give_Amount">Amount: </label>
-				<input type="number" id="GiveAmount"></input>
+				<input type="number" id="Give_Amount"></input>
 				<div class="spacer"></div>
 				<button>Give Cash</button>
 			</div><div id="PayPrivates">
@@ -1042,9 +1088,9 @@ TODO:
 				<button>Pay Privates</button>				
 			</div><div id="Sell" class="long">
 				<label for="Sell_Buyer">Buyer: </label>
-				<input type="text" id="Sell_Buyer"></input>
+				<select id="Sell_Buyer"></select>
 				<label for="Sell_Seller">Seller: </label>
-				<input type="text" id="Sell_Seller"></input>
+				<select id="Sell_Seller"></select>
 				<label for="Sell_Holding">Holding: </label>
 				<select id="Sell_Holding" onchange="SetDefaultPrice(event.target.value)"></select>
 				<label for="Sell_Count">Count:</label>
@@ -1055,10 +1101,48 @@ TODO:
 				<button>Sell</button>
 			</div>
 		</div>
-		<div id="UI-Selection">
-			<div>
-				<button onclick="showUI('UI')">Admin</button>
-				<button onclick="showUI('OR')">Operating Round</button>
+		<div id="OR" class="UI">
+			<div id="RailSelect">
+				<label for="OR_Rail">Rail: </label>
+				<select id="OR_Rail"></select>
+			</div><div id="PayBankTwenty">
+				<div class="spacer"></div>
+				<button>Pay Bank 20</button>
+			</div><div id="BuyTrain">
+				<label for="BuyTrain_Train">Train: </label>
+				<select id="BuyTrain_Train"></select>
+				<div class="spacer"></div>
+				<button>Buy Train</button>
+			</div><div id="ShuffleTrain">
+				<label for="ShuffleTrain_From">From: </label>
+				<select id="ShuffleTrain_From"></select>
+				<label for="ShuffleTrain_Train">Train: </label>
+				<select id="ShuffleTrain_Train"></select>
+				<label for="ShuffleTrain_Price">Price: </label>
+				<input type="number" id="ShuffleTrain_Price"></input>
+				<div class="spacer"></div>
+				<button>Shuffle Train</button>
+			</div><div id="Issue" class="short">
+				<div class="spacer"></div>
+				<button>Issue Share</button>
+			</div><div id="Redeem" class="short">
+				<div class="spacer"></div>
+				<button>Redeem Share</button>
+			</div><div id="PayFull">
+				<label for="PayFull_RtA">Route:</label>
+				<input type="number" id="PayFull_RtA"></input>
+				<div class="spacer"></div>
+				<button>Pay Full</button>
+			</div><div id="PayHalf">
+				<label for="PayHalf_RtA">Route:</label>
+				<input type="number" id="PayHalf_RtA"></input>
+				<div class="spacer"></div>
+				<button>Pay Half</button>
+			</div><div id="Withhold">
+				<label for="Withhold_RtA">Route:</label>
+				<input type="number" id="Withhold_RtA"></input>
+				<div class="spacer"></div>
+				<button>Withhold</button>
 			</div>
 		</div>
 	</div>
